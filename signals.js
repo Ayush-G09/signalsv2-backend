@@ -296,23 +296,26 @@ exports.swing = async (symbol) => {
 /* ------------------------------ ScoreSignal Strategy (Phase 1) ------------------------------ */
 exports.scoresignal = async (symbol) => {
   try {
-    const chart = await yf.chart(symbol, { interval: '5m', range: '1d' });
-    const data = chart.quotes.map(q => ({
-      high: q.high,
-      low: q.low,
-      close: q.close,
-      open: q.open,
-      volume: q.volume
-    }));
+    const chart = await yf.chart(symbol, { interval: '15m', range: '5d' });
+    const data = chart.quotes
+      .filter(q => q && q.high && q.low && q.close && q.volume)
+      .map(q => ({
+        high: q.high,
+        low: q.low,
+        close: q.close,
+        open: q.open,
+        volume: q.volume
+      }));
 
     if (data.length < 30) throw new Error("Not enough data points");
     let score = 0;
+    const closes = data.map(d => d.close);
 
     /* ---------- VWAP ---------- */
-    const vwap =
-      data.reduce((acc, d) => acc + (d.close * d.volume), 0) /
-      data.reduce((acc, d) => acc + d.volume, 0);
-    if (data[data.length - 1].close > vwap) score += 1; else score -= 1;
+    const vwap = data.reduce((acc, d) => acc + d.close * d.volume, 0) /
+                 data.reduce((acc, d) => acc + d.volume, 0);
+    const lastClose = closes.at(-1);
+    if (lastClose > vwap) score += 1; else score -= 1;
 
     /* ---------- EMA(9) & EMA(21) ---------- */
     const ema = (arr, period) => {
@@ -323,7 +326,6 @@ exports.scoresignal = async (symbol) => {
       }
       return emaArr;
     };
-    const closes = data.map(d => d.close);
     const ema9 = ema(closes, 9);
     const ema21 = ema(closes, 21);
     if (ema9.at(-1) > ema21.at(-1)) score += 1; else score -= 1;
@@ -339,8 +341,8 @@ exports.scoresignal = async (symbol) => {
     const avgLoss = losses.slice(-14).reduce((a, b) => a + b, 0) / 14;
     const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
     const rsi = 100 - (100 / (1 + rs));
-    if (rsi > 70) score -= 1;
-    else if (rsi < 30) score += 1;
+    if (rsi < 45) score += 1;
+    else if (rsi > 65) score -= 1;
 
     /* ---------- MACD(12,26,9) ---------- */
     const ema12 = ema(closes, 12);
@@ -348,7 +350,7 @@ exports.scoresignal = async (symbol) => {
     const macdLine = ema12.map((v, i) => v - ema26[i]);
     const signalLine = ema(macdLine, 9);
     const macdHist = macdLine.at(-1) - signalLine.at(-1);
-    if (macdHist > 0) score += 1; else score -= 1;
+    if (macdHist > 0) score += 2; else score -= 2;
 
     /* ---------- Bollinger Bands (20,2) ---------- */
     const period = 20;
@@ -359,9 +361,22 @@ exports.scoresignal = async (symbol) => {
     );
     const upper = mean + 2 * stdDev;
     const lower = mean - 2 * stdDev;
-    const lastClose = closes.at(-1);
     if (lastClose > upper) score -= 1;
     else if (lastClose < lower) score += 1;
+
+    /* ---------- Debug Log ---------- */
+    console.log(`
+==============================
+[scoresignal] ${symbol}
+Close: ${lastClose}
+VWAP: ${vwap.toFixed(2)}
+EMA9: ${ema9.at(-1).toFixed(2)} | EMA21: ${ema21.at(-1).toFixed(2)}
+RSI: ${rsi.toFixed(2)}
+MACD Hist: ${macdHist.toFixed(2)}
+BBands: ${lower.toFixed(2)} - ${upper.toFixed(2)}
+Score: ${score}
+==============================
+`);
 
     /* ---------- Final Signal ---------- */
     let final = 'Hold';
