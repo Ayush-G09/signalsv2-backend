@@ -292,3 +292,88 @@ exports.swing = async (symbol) => {
     return { trend: 'neutral', setup: 'neutral', entry: 'neutral' };
   }
 };
+
+/* ------------------------------ ScoreSignal Strategy (Phase 1) ------------------------------ */
+exports.scoresignal = async (symbol) => {
+  try {
+    const chart = await yf.chart(symbol, { interval: '5m', range: '1d' });
+    const data = chart.quotes.map(q => ({
+      high: q.high,
+      low: q.low,
+      close: q.close,
+      open: q.open,
+      volume: q.volume
+    }));
+
+    if (data.length < 30) throw new Error("Not enough data points");
+    let score = 0;
+
+    /* ---------- VWAP ---------- */
+    const vwap =
+      data.reduce((acc, d) => acc + (d.close * d.volume), 0) /
+      data.reduce((acc, d) => acc + d.volume, 0);
+    if (data[data.length - 1].close > vwap) score += 1; else score -= 1;
+
+    /* ---------- EMA(9) & EMA(21) ---------- */
+    const ema = (arr, period) => {
+      const k = 2 / (period + 1);
+      let emaArr = [arr[0]];
+      for (let i = 1; i < arr.length; i++) {
+        emaArr.push(arr[i] * k + emaArr[i - 1] * (1 - k));
+      }
+      return emaArr;
+    };
+    const closes = data.map(d => d.close);
+    const ema9 = ema(closes, 9);
+    const ema21 = ema(closes, 21);
+    if (ema9.at(-1) > ema21.at(-1)) score += 1; else score -= 1;
+
+    /* ---------- RSI(14) ---------- */
+    const gains = [], losses = [];
+    for (let i = 1; i < closes.length; i++) {
+      const diff = closes[i] - closes[i - 1];
+      gains.push(diff > 0 ? diff : 0);
+      losses.push(diff < 0 ? -diff : 0);
+    }
+    const avgGain = gains.slice(-14).reduce((a, b) => a + b, 0) / 14;
+    const avgLoss = losses.slice(-14).reduce((a, b) => a + b, 0) / 14;
+    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    const rsi = 100 - (100 / (1 + rs));
+    if (rsi > 70) score -= 1;
+    else if (rsi < 30) score += 1;
+
+    /* ---------- MACD(12,26,9) ---------- */
+    const ema12 = ema(closes, 12);
+    const ema26 = ema(closes, 26);
+    const macdLine = ema12.map((v, i) => v - ema26[i]);
+    const signalLine = ema(macdLine, 9);
+    const macdHist = macdLine.at(-1) - signalLine.at(-1);
+    if (macdHist > 0) score += 1; else score -= 1;
+
+    /* ---------- Bollinger Bands (20,2) ---------- */
+    const period = 20;
+    const recent = closes.slice(-period);
+    const mean = recent.reduce((a, b) => a + b, 0) / period;
+    const stdDev = Math.sqrt(
+      recent.map(c => (c - mean) ** 2).reduce((a, b) => a + b, 0) / period
+    );
+    const upper = mean + 2 * stdDev;
+    const lower = mean - 2 * stdDev;
+    const lastClose = closes.at(-1);
+    if (lastClose > upper) score -= 1;
+    else if (lastClose < lower) score += 1;
+
+    /* ---------- Final Signal ---------- */
+    let final = 'Hold';
+    if (score >= 4) final = 'Strong Buy';
+    else if (score >= 2) final = 'Buy';
+    else if (score <= -4) final = 'Strong Sell';
+    else if (score <= -2) final = 'Sell';
+
+    return { symbol, score, final };
+
+  } catch (err) {
+    console.error(`[scoresignal] Error for ${symbol}: ${err.message}`);
+    return { symbol, score: 0, final: 'Hold', error: err.message };
+  }
+};
