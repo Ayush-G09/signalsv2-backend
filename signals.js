@@ -1,4 +1,4 @@
-const YahooFinance = require('yahoo-finance2').default;
+const YahooFinance = require("yahoo-finance2").default;
 const yf = new YahooFinance();
 
 /* ------------------------------ ATR Calculation ------------------------------ */
@@ -77,20 +77,20 @@ function formatDate(date) {
 function calculatePeriod1(duration) {
   const now = new Date();
   const value = parseInt(duration);
-  if (duration.endsWith('d')) now.setDate(now.getDate() - value);
-  else if (duration.endsWith('mo')) now.setMonth(now.getMonth() - value);
+  if (duration.endsWith("d")) now.setDate(now.getDate() - value);
+  else if (duration.endsWith("mo")) now.setMonth(now.getMonth() - value);
   else throw new Error("Unsupported duration format; use 'Xd' or 'Xmo'");
   return formatDate(now);
 }
 
-async function getHistory(symbol, duration = '7d') {
+async function getHistory(symbol, duration = "7d") {
   try {
     const period1Str = calculatePeriod1(duration);
     const period2Str = formatDate(new Date());
     const prices = await yf.historical(symbol, {
       period1: period1Str,
       period2: period2Str,
-      interval: '1d'
+      interval: "1d",
     });
     if (!prices || prices.length === 0)
       throw new Error(`No historical data for ${symbol}`);
@@ -104,9 +104,9 @@ async function getHistory(symbol, duration = '7d') {
 /* ---------------------- Supertrend Multi-timeframe ---------------------- */
 async function getIntradaySupertrend(symbol) {
   const intervals = [
-    { label: 'trend', interval: '60m' },
-    { label: 'setup', interval: '15m' },
-    { label: 'entry', interval: '5m' }
+    { label: "trend", interval: "60m" },
+    { label: "setup", interval: "15m" },
+    { label: "entry", interval: "5m" },
   ];
 
   const now = new Date();
@@ -121,23 +121,26 @@ async function getIntradaySupertrend(symbol) {
         const chart = await yf.chart(symbol, {
           period1: period1.toISOString(),
           period2: now.toISOString(),
-          interval
+          interval,
         });
 
-        const data = chart.quotes.map(q => ({
+        const data = chart.quotes.map((q) => ({
           high: q.high,
           low: q.low,
-          close: q.close
+          close: q.close,
         }));
 
         if (data.length < 2) throw new Error("Not enough data points");
 
         const { direction } = calculateSupertrend(data, 10, 3);
         const lastDir = direction[direction.length - 1];
-        results[label] = lastDir === 1 ? 'up' : 'down';
+        results[label] = lastDir === 1 ? "up" : "down";
       } catch (err) {
-        console.error(`[getIntradaySupertrend] ${symbol} ${label} error:`, err.message);
-        results[label] = 'neutral';
+        console.error(
+          `[getIntradaySupertrend] ${symbol} ${label} error:`,
+          err.message
+        );
+        results[label] = "neutral";
       }
     })
   );
@@ -147,9 +150,9 @@ async function getIntradaySupertrend(symbol) {
 
 async function getSwingSupertrend(symbol) {
   const intervals = [
-    { label: 'trend', interval: '1d' },
-    { label: 'setup', interval: '60m' },
-    { label: 'entry', interval: '15m' }
+    { label: "trend", interval: "1d" },
+    { label: "setup", interval: "60m" },
+    { label: "entry", interval: "15m" },
   ];
 
   const now = new Date();
@@ -164,23 +167,26 @@ async function getSwingSupertrend(symbol) {
         const chart = await yf.chart(symbol, {
           period1: period1.toISOString(),
           period2: now.toISOString(),
-          interval
+          interval,
         });
 
-        const data = chart.quotes.map(q => ({
+        const data = chart.quotes.map((q) => ({
           high: q.high,
           low: q.low,
-          close: q.close
+          close: q.close,
         }));
 
         if (data.length < 2) throw new Error("Not enough data points");
 
         const { direction } = calculateSupertrend(data, 10, 3);
         const lastDir = direction[direction.length - 1];
-        results[label] = lastDir === 1 ? 'up' : 'down';
+        results[label] = lastDir === 1 ? "up" : "down";
       } catch (err) {
-        console.error(`[getSwingSupertrend] ${symbol} ${label} error:`, err.message);
-        results[label] = 'neutral';
+        console.error(
+          `[getSwingSupertrend] ${symbol} ${label} error:`,
+          err.message
+        );
+        results[label] = "neutral";
       }
     })
   );
@@ -188,49 +194,109 @@ async function getSwingSupertrend(symbol) {
   return results;
 }
 
+/* -------------------------- ADX, D+, and D- Calculation -------------------------- */
+function calculateADX(data, diLen = 14, adxLen = 14) {
+  const plusDM = [];
+  const minusDM = [];
+  const tr = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const upMove = data[i].high - data[i - 1].high;
+    const downMove = data[i - 1].low - data[i].low;
+
+    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
+
+    const trueRange = Math.max(
+      data[i].high - data[i].low,
+      Math.abs(data[i].high - data[i - 1].close),
+      Math.abs(data[i].low - data[i - 1].close)
+    );
+    tr.push(trueRange);
+  }
+
+  // Wilder's smoothing (RMA)
+  const rma = (arr, len) => {
+    const result = [];
+    let sum = arr.slice(0, len).reduce((a, b) => a + b, 0);
+    result[len - 1] = sum / len;
+    for (let i = len; i < arr.length; i++) {
+      result[i] = (result[i - 1] * (len - 1) + arr[i]) / len;
+    }
+    return result;
+  };
+
+  const trRMA = rma(tr, diLen);
+  const plusRMA = rma(plusDM, diLen);
+  const minusRMA = rma(minusDM, diLen);
+
+  const plusDI = plusRMA.map((v, i) => (v / trRMA[i]) * 100);
+  const minusDI = minusRMA.map((v, i) => (v / trRMA[i]) * 100);
+
+  const dx = plusDI.map((v, i) =>
+    i < diLen - 1
+      ? null
+      : (Math.abs(v - minusDI[i]) / (v + minusDI[i])) * 100
+  );
+
+  const adx = rma(dx.filter((v) => v !== null), adxLen);
+
+  // Align arrays to data length
+  const pad = data.length - adx.length;
+  return {
+    plusDI: [Array(pad).fill(null), ...plusDI.slice(pad)].flat(),
+    minusDI: [Array(pad).fill(null), ...minusDI.slice(pad)].flat(),
+    adx: [Array(pad).fill(null), ...adx].flat(),
+  };
+}
+
 /* ------------------------------ Signal Generators ------------------------------ */
 exports.momentum = async (symbol) => {
   try {
-    const prices = await getHistory(symbol, '10d');
-    if (prices.length < 2) return 'Hold';
-    const change = ((prices[0].close - prices[prices.length - 1].close) / prices[prices.length - 1].close) * 100;
-    if (change > 3) return 'Buy';
-    if (change < -3) return 'Sell';
-    return 'Hold';
+    const prices = await getHistory(symbol, "10d");
+    if (prices.length < 2) return "Hold";
+    const change =
+      ((prices[0].close - prices[prices.length - 1].close) /
+        prices[prices.length - 1].close) *
+      100;
+    if (change > 3) return "Buy";
+    if (change < -3) return "Sell";
+    return "Hold";
   } catch {
-    return 'Hold';
+    return "Hold";
   }
 };
 
 exports.breakout = async (symbol) => {
   try {
-    const prices = await getHistory(symbol, '1mo');
-    if (prices.length < 2) return 'Hold';
+    const prices = await getHistory(symbol, "1mo");
+    if (prices.length < 2) return "Hold";
     const lastClose = prices[0].close;
-    const prevHigh = Math.max(...prices.slice(1).map(p => p.high));
-    const prevLow = Math.min(...prices.slice(1).map(p => p.low));
-    if (lastClose > prevHigh) return 'Buy';
-    if (lastClose < prevLow) return 'Sell';
-    return 'Hold';
+    const prevHigh = Math.max(...prices.slice(1).map((p) => p.high));
+    const prevLow = Math.min(...prices.slice(1).map((p) => p.low));
+    if (lastClose > prevHigh) return "Buy";
+    if (lastClose < prevLow) return "Sell";
+    return "Hold";
   } catch {
-    return 'Hold';
+    return "Hold";
   }
 };
 
 exports.volume = async (symbol) => {
   try {
-    const prices = await getHistory(symbol, '10d');
-    if (prices.length < 2) return 'Hold';
-    const avgVolume = prices.slice(1).reduce((a, b) => a + b.volume, 0) / (prices.length - 1);
+    const prices = await getHistory(symbol, "10d");
+    if (prices.length < 2) return "Hold";
+    const avgVolume =
+      prices.slice(1).reduce((a, b) => a + b.volume, 0) / (prices.length - 1);
     const today = prices[0];
     const yesterday = prices[1];
     if (today.volume > avgVolume * 2) {
-      if (today.close > yesterday.close) return 'Buy';
-      if (today.close < yesterday.close) return 'Sell';
+      if (today.close > yesterday.close) return "Buy";
+      if (today.close < yesterday.close) return "Sell";
     }
-    return 'Hold';
+    return "Hold";
   } catch {
-    return 'Hold';
+    return "Hold";
   }
 };
 
@@ -240,33 +306,42 @@ exports.combined = async (symbol) => {
     const [momentum, breakout, volume] = await Promise.all([
       exports.momentum(symbol),
       exports.breakout(symbol),
-      exports.volume(symbol)
+      exports.volume(symbol),
     ]);
 
     console.log(`[combined] ${symbol}:`, { momentum, breakout, volume });
 
-    let final = 'Hold';
+    let final = "Hold";
 
     if (
-      (momentum === 'Buy' && breakout === 'Buy' && volume === 'Buy') ||
-      (momentum === 'Buy' && volume === 'Buy')
+      (momentum === "Buy" && breakout === "Buy" && volume === "Buy") ||
+      (momentum === "Buy" && volume === "Buy")
     ) {
-      final = 'Strong Buy';
+      final = "Strong Buy";
     } else if (
-      (momentum === 'Sell' && breakout === 'Sell' && volume === 'Sell') ||
-      (momentum === 'Sell' && volume === 'Sell')
+      (momentum === "Sell" && breakout === "Sell" && volume === "Sell") ||
+      (momentum === "Sell" && volume === "Sell")
     ) {
-      final = 'Strong Sell';
-    } else if (momentum === 'Buy' || breakout === 'Buy' || volume === 'Buy') {
-      final = 'Buy';
-    } else if (momentum === 'Sell' || breakout === 'Sell' || volume === 'Sell') {
-      final = 'Sell';
+      final = "Strong Sell";
+    } else if (momentum === "Buy" || breakout === "Buy" || volume === "Buy") {
+      final = "Buy";
+    } else if (
+      momentum === "Sell" ||
+      breakout === "Sell" ||
+      volume === "Sell"
+    ) {
+      final = "Sell";
     }
 
     return { momentum, breakout, volume, final };
   } catch (err) {
     console.error(`[combined] Error: ${err.message}`);
-    return { momentum: 'Hold', breakout: 'Hold', volume: 'Hold', final: 'Hold' };
+    return {
+      momentum: "Hold",
+      breakout: "Hold",
+      volume: "Hold",
+      final: "Hold",
+    };
   }
 };
 
@@ -278,7 +353,7 @@ exports.intraday = async (symbol) => {
     return signal;
   } catch (err) {
     console.error(`[intraday] Error: ${err.message}`);
-    return { trend: 'neutral', setup: 'neutral', entry: 'neutral' };
+    return { trend: "neutral", setup: "neutral", entry: "neutral" };
   }
 };
 
@@ -289,106 +364,52 @@ exports.swing = async (symbol) => {
     return signal;
   } catch (err) {
     console.error(`[swing] Error: ${err.message}`);
-    return { trend: 'neutral', setup: 'neutral', entry: 'neutral' };
+    return { trend: "neutral", setup: "neutral", entry: "neutral" };
   }
 };
 
-/* ------------------------------ ScoreSignal Strategy (Phase 1) ------------------------------ */
-exports.scoresignal = async (symbol) => {
+exports.adx = async (symbol) => {
   try {
-    const chart = await yf.chart(symbol, { interval: '15m', range: '5d' });
-    const data = chart.quotes
-      .filter(q => q && q.high && q.low && q.close && q.volume)
-      .map(q => ({
-        high: q.high,
-        low: q.low,
-        close: q.close,
-        open: q.open,
-        volume: q.volume
-      }));
+    // Fetch 60-minute historical data for the last few days
+    const now = new Date();
+    const period1 = new Date(now);
+    period1.setDate(period1.getDate() - 10); // last 10 days of intraday data
 
-    if (data.length < 30) throw new Error("Not enough data points");
-    let score = 0;
-    const closes = data.map(d => d.close);
+    const chart = await yf.chart(symbol, {
+      period1: period1.toISOString(),
+      period2: now.toISOString(),
+      interval: "60m", // 👈 60-minute candles
+    });
 
-    /* ---------- VWAP ---------- */
-    const vwap = data.reduce((acc, d) => acc + d.close * d.volume, 0) /
-                 data.reduce((acc, d) => acc + d.volume, 0);
-    const lastClose = closes.at(-1);
-    if (lastClose > vwap) score += 1; else score -= 1;
+    const data = chart.quotes.map((q) => ({
+      high: q.high,
+      low: q.low,
+      close: q.close,
+    }));
 
-    /* ---------- EMA(9) & EMA(21) ---------- */
-    const ema = (arr, period) => {
-      const k = 2 / (period + 1);
-      let emaArr = [arr[0]];
-      for (let i = 1; i < arr.length; i++) {
-        emaArr.push(arr[i] * k + emaArr[i - 1] * (1 - k));
-      }
-      return emaArr;
+    if (data.length < 15)
+      return { adx: null, plusDI: null, minusDI: null, signal: "Hold" };
+
+    const { adx, plusDI, minusDI } = calculateADX(data, 14, 14);
+    const lastADX = adx[adx.length - 1];
+    const lastPlus = plusDI[plusDI.length - 1];
+    const lastMinus = minusDI[minusDI.length - 1];
+
+    let signal = "Hold";
+
+    // ✅ Interpretation based on 60m ADX
+    if (lastPlus > lastMinus && lastADX > 25) signal = "Buy";
+    else if (lastMinus > lastPlus && lastADX > 25) signal = "Sell";
+
+    return {
+      adx: lastADX ? lastADX.toFixed(2) : null,
+      plusDI: lastPlus ? lastPlus.toFixed(2) : null,
+      minusDI: lastMinus ? lastMinus.toFixed(2) : null,
+      signal,
     };
-    const ema9 = ema(closes, 9);
-    const ema21 = ema(closes, 21);
-    if (ema9.at(-1) > ema21.at(-1)) score += 1; else score -= 1;
-
-    /* ---------- RSI(14) ---------- */
-    const gains = [], losses = [];
-    for (let i = 1; i < closes.length; i++) {
-      const diff = closes[i] - closes[i - 1];
-      gains.push(diff > 0 ? diff : 0);
-      losses.push(diff < 0 ? -diff : 0);
-    }
-    const avgGain = gains.slice(-14).reduce((a, b) => a + b, 0) / 14;
-    const avgLoss = losses.slice(-14).reduce((a, b) => a + b, 0) / 14;
-    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-    const rsi = 100 - (100 / (1 + rs));
-    if (rsi < 45) score += 1;
-    else if (rsi > 65) score -= 1;
-
-    /* ---------- MACD(12,26,9) ---------- */
-    const ema12 = ema(closes, 12);
-    const ema26 = ema(closes, 26);
-    const macdLine = ema12.map((v, i) => v - ema26[i]);
-    const signalLine = ema(macdLine, 9);
-    const macdHist = macdLine.at(-1) - signalLine.at(-1);
-    if (macdHist > 0) score += 2; else score -= 2;
-
-    /* ---------- Bollinger Bands (20,2) ---------- */
-    const period = 20;
-    const recent = closes.slice(-period);
-    const mean = recent.reduce((a, b) => a + b, 0) / period;
-    const stdDev = Math.sqrt(
-      recent.map(c => (c - mean) ** 2).reduce((a, b) => a + b, 0) / period
-    );
-    const upper = mean + 2 * stdDev;
-    const lower = mean - 2 * stdDev;
-    if (lastClose > upper) score -= 1;
-    else if (lastClose < lower) score += 1;
-
-    /* ---------- Debug Log ---------- */
-    console.log(`
-==============================
-[scoresignal] ${symbol}
-Close: ${lastClose}
-VWAP: ${vwap.toFixed(2)}
-EMA9: ${ema9.at(-1).toFixed(2)} | EMA21: ${ema21.at(-1).toFixed(2)}
-RSI: ${rsi.toFixed(2)}
-MACD Hist: ${macdHist.toFixed(2)}
-BBands: ${lower.toFixed(2)} - ${upper.toFixed(2)}
-Score: ${score}
-==============================
-`);
-
-    /* ---------- Final Signal ---------- */
-    let final = 'Hold';
-    if (score >= 4) final = 'Strong Buy';
-    else if (score >= 2) final = 'Buy';
-    else if (score <= -4) final = 'Strong Sell';
-    else if (score <= -2) final = 'Sell';
-
-    return { symbol, score, final };
-
   } catch (err) {
-    console.error(`[scoresignal] Error for ${symbol}: ${err.message}`);
-    return { symbol, score: 0, final: 'Hold', error: err.message };
+    console.error(`[adx] Error: ${err.message}`);
+    return { adx: null, plusDI: null, minusDI: null, signal: "Hold" };
   }
 };
+
